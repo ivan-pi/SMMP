@@ -1,0 +1,9 @@
+name = "SMMP"
+version = "0.1.0"
+license = "license"
+author = ["Randolp E. Bank", "Craig C. Douglas"]
+maintainer = "@ivan-pi"
+description = "Sparse matrix multiplication package"
+
+[library]
+source-dir="src"

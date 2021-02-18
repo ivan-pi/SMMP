@@ -1,0 +1,610 @@
+% Documentation written February, 1988
+%           and updated May, 1992
+%           and updated March - April, 1993
+%
+% To produce a .dvi file, run this file through LaTeX:
+%
+%       latex aicm
+%
+% LaTeX has to be run at least twice in order to get the cross references
+% and citations correct.  Then run the output through your local printing
+% filter, e.g.,
+%
+%       dvips aicm | lpr
+%
+ 
+%\documentstyle[12pt,fixup,numinsec]{siam}
+\documentstyle[fixup,numinsec]{siam}
+\pretolerance=800
+\tolerance=10000
+
+% ----------------------------------------------------------------------
+ 
+\title{Sparse Matrix Multiplication Package (SMMP)\thanks{%
+%           Draft of April 2, 1993.
+            To appear in Advances in Computational Mathematics,
+            1 (1993), first issue.
+            The algorithms and routines described here were developed
+            while both authors were visiting the Center for Applied
+            Mathematics, Department of Mathematics, Purdue University.
+            }
+      }
+\author{Randolph E. Bank\thanks{University of California at San Diego,
+                Department of Mathematics C012, P. O. Box 109,
+                LaJolla, CA 92093.
+                E-mail:  {\it rbank@ucsd.edu}}
+   \and 
+        Craig C. Douglas\thanks{
+                Department of Computer Science,
+                Yale University,
+                P. O. Box 2158 Yale Station,
+                New Haven, CT 06520-2158
+                and
+                Mathematical Sciences Department,
+                IBM Research Division,
+                Thomas J. Watson Research Center,
+                P. O. Box 218,
+                Yorktown Heights, NY 10598-0218,
+                USA.
+                E-mail:  {\it na.cdouglas@na-net-ornl.gov.}}
+       }
+
+\begin{document}
+\bibliographystyle{siam}
+\maketitle
+ 
+% ----------------------------------------------------------------------
+ 
+\begin{abstract}
+Routines callable from FORTRAN and C are described which implement
+matrix--matrix multiplication and transposition for a variety of sparse matrix
+formats.
+Conversion routines between various formats are provided.
+\end{abstract}
+
+\begin{keywords}
+sparse matrices, matrix multiplication, transposition, numerical linear
+algebra
+\end{keywords}
+
+\begin{AMSMOS}
+{\bf Numerical Analysis}: Numerical Linear Algebra
+\end{AMSMOS}
+ 
+% ----------------------------------------------------------------------
+ 
+\section{Introduction}
+\label{Sec:Introduction}
+ 
+The routines described here perform matrix-matrix multiplies, transposes, and
+format conversions for sparse matrices.  There are three formats supported.
+These include the old and new Yale sparse matrix package formats 
+\cite{NewYSMP,YSMP1,YSMP2} and the more
+efficient one for square matrices advocated by Bank and Smith
+\cite{BankSmith87}.  In each case, only the nonzeros are stored, not the zeros
+(or as few as possible).
+ 
+The principal use of these routines will probably be in implementing parallel
+computation algorithms.  For example, in one variant of parallel multigrid
+\cite{DouglasMiranker87,DouglasSmith88}, as the number of coarse grid problems
+per level grows, it becomes increasingly difficult to generate the coefficient
+matrices based on grids, as a serial multigrid solver does.
+ 
+In \S\ref{Sec:SparseMatrixFormats}, we describe the sparse matrix formats we
+support.  In \S\ref{Sec:CallingSequences}, we describe the structure of the
+package and the calling sequences of each routine.  In \S\ref{Sec:Algorithms},
+we describe the algorithms implemented by the package.  Finally, in
+\S\ref{Sec:Source_Code} are instructions for getting a copy of the code.
+ 
+The routines described here differ from those in either SPARSKIT (see
+\cite{Saad90}) or the proposed sparse BLAS (see \cite{DuffMarrRadi92} and
+\cite{Heroux}).
+There is some overlap with SPARSKIT, but we are more interested in a data
+format not supported in SPARSKIT.
+The sparse BLAS have interfaces for multiplying a sparse matrix by a dense
+one, but not for multiplying two sparse matrices.
+Also, our routines are in the public domain with absolutely no restrictions
+on their use while the others are not.
+
+% ----------------------------------------------------------------------
+ 
+\section{Sparse matrix formats}
+\label{Sec:SparseMatrixFormats}
+ 
+In this section, we define three methods for storing a sparse matrix $M$.  Let
+\mbox{$M = D + L + U$}, where $D$ is the main diagonal part of $M$, $L$ is the
+strictly lower triangular part of $M$, and $U$ is the strictly upper
+triangular part of $M$.  We define the number of nonzeros of $M$ as $NZ(M)$.
+ 
+The old Yale sparse matrix format \cite{YSMP1,YSMP2} requires three vectors:
+\[
+\begin{array}{llcl}\cline{2-2}
+IA:  & \multicolumn{1}{|l|}{IA\hspace*{0.9in}}
+                                & {\rm length} & N + 1\\ \cline{2-2}
+     &                          &              & \\ \cline{2-2}
+JA:  & \multicolumn{1}{|l|}{JA\hspace*{3.5in}}
+                                & {\rm length} & NZ(M)\\ \cline{2-2}
+     &                          & {\rm or}     & NZ(D+U)\\
+     &                          &              & \\ \cline{2-2}
+A:   & \multicolumn{1}{|l|}{M~\hspace*{3.5in}}
+                                & {\rm length} & NZ(M)\\ \cline{2-2}
+     &                          & {\rm or}     & NZ(D+U)
+\end{array}
+\]
+$M$ is stored in row form.  If $M$ is symmetric, the elements of $L$ do
+not have to be stored in $A$.  The first element of row $I$ is
+$A(IA(I))$.  The length of row $I$ is determined by $IA(I+1)-IA(I)$,
+which is why $IA$ requires $N+1$ elements instead of the obvious $N$
+elements.  The column indices of $M$ are stored in the $JA$ vector.
+For element $A(J)$, its column index is $JA(J)$.  The elements in a
+row may be stored in any order.
+ 
+     The new Yale sparse matrix format \cite{NewYSMP} requires two vectors:
+\[
+\begin{array}{llcl}\cline{2-2}
+IJA: & \multicolumn{1}{|l|}{IA\hspace{0.6in}~\mid~JA\hspace*{2.4in}}    
+                              & {\rm length} & N+1+NZ(M-D)\\ \cline{2-2}
+     &                        & {\rm or}     & N+1+NZ(U)\\
+     &                        &              & \\ \cline{2-2}
+A:   & \multicolumn{1}{|l|}{D\hspace{0.525in}\mid 0 
+                                            \mid~L~{\rm and}~U\hspace*{2.1in}}    
+                              & {\rm length} & N+1+NZ(M-D)\\ \cline{2-2}
+     &                        & {\rm or}     & N+1+NZ(U)  
+\end{array}
+\]
+$M$ is still stored in row form.  The $IA$-$JA$ vectors of the old
+format are combined into a single vector, sometimes referred as
+an $IJA$ vector.  As before, the first element of row $I$ is
+$A(IJA(I))$.  In this case, the main diagonal of $M$ is separated out
+from the nonzeros of $L$ and $U$.  The diagonal for row $I$ is in $A(I)$.
+There is a zero after $D$ so that the $JA$ and $L/U$ parts of the $IJA$
+and $A$ vectors are aligned properly.  Technically, the rows of $A$
+should be stored in ascending column order.  However, this is not
+enforced.
+ 
+     The Bank-Smith sparse matrix format \cite{BankSmith87} requires $M$ to be a
+square matrix with a symmetric (or nearly so) zero structure.  It
+requires two vectors:
+\[
+\begin{array}{llcl}\cline{2-2}
+IJA: & \multicolumn{1}{|l|}{IA\hspace{0.6in}~\mid~JA\hspace*{2.4in}}    
+                              & {\rm length} & N+1+NZ(U)\\ \cline{2-2}
+     &                        &              & \\ \cline{2-2}
+A:   & \multicolumn{1}{|l|}{D\hspace{0.525in}\mid 0 
+                            \mid~U^T\hspace*{1.0in}\mid~L\hspace*{1.0in}}
+                              & {\rm length} & N+1+NZ(M-D)\\ \cline{2-2}
+     &                        & {\rm or}     & N+1+NZ(U)
+\end{array}
+\]
+While $M$ is stored strictly in row form, in a real sense it is
+stored in both column and row form.  Since we assume that $M$ has a
+symmetric zero structure (or $L$ and $U$ are padded by a small number
+of zeros), we need only store the row indices for $U$ (when $U$ is
+stored in column form).  These are also the column indices for $L$
+(when $L$ is stored in row form).  However, we store the transpose
+of $U$ in row form instead of $U$. If $M$ is symmetric, the elements of
+$L$ do not have to be stored in $A$. The first element of column $I$ of
+$U$ is $A(IA(I))$.  The length of column $I$ is determined by 
+$IA(I+1)-IA(I)$, which is why $IA$ requires $N+1$ elements instead of the
+obvious $N$ elements.  The row indices of $U$ are stored in the $JA$
+vector.  For element $A(J)$, its row index is $JA(J)$.  The elements
+in a column must be stored in ascending row order.  We define
+$LSHIFT$ to be 0 if $M$ is symmetric and $IA(N+1)-IA(1)$ if $M$ is
+nonsymmetric.  The first element of $L$ is $A(IA(1)+LSHIFT)$.  $L$ is
+stored in row format.  The column index of an element
+$A(IA(I)+J+LSHIFT)$ is $JA(IA(I)+J)$.
+ 
+     For all three sparse matrix formats, we can assume there are
+three vectors $IA$, $JA$, and $A$ which describe $M$.  Except for the old
+Yale sparse matrix format, the vectors $IA$ and $JA$ are really the
+same vector $IJA$.  We also need a variable $DIAGA$ which is one if
+the diagonal is separated from the rest of the nonzeros and zero
+otherwise.  Last, we need a variable $SYMA$ which is one if $M$ is
+stored in a symmetric manner and zero otherwise.
+
+% ----------------------------------------------------------------------
+ 
+\section{Calling sequences}
+\label{Sec:CallingSequences}
+ 
+In this section, we describe the five routines which comprise the package.
+These include two routines to multiply matrices, a routine for the transpose
+of a matrix, and two routines to convert between various sparse matrix
+formats.
+ 
+For each routine in this section, the calling sequence assumes distinct $IA$
+and $JA$ vectors for each matrix.  Suppose a matrix is actually stored using
+an $IJA$ vector.  Then the routine should be called with $IJA$ as an argument
+twice, once for each $IA$ and $JA$.  The $IJA$ vector should not be
+subscripted to point to either of the $IA$ or $JA$ parts; the routines will do
+this automatically.
+ 
+We multiply two sparse matrices, resulting in a third:
+\begin{center}
+$C\ =\ AB.$
+\end{center}
+Matrix-matrix multiplication is performed in two steps.  These routines only
+support the Yale sparse matrix formats.  First, the nonzero structure of the
+resulting matrix is determined symbolically in $SYMBMM$:
+\begin{center}
+$\begin{array}{lll}
+subroutine & SYMBMM  & (N,M,L,\ IA,JA,DIAGA,\ IB,JB,DIAGB,\\
+           &         & \ IC,JC,DIAGC,\ INDEX)\\
+           &         & \\
+           & integer & N,M,L,\ IA(*),JA(*),DIAGA,\\
+           &         & IB(*),JB(*),DIAGB,\ IC(*),JC(*),DIAGC,\\
+           &         & INDEX(*)
+\end{array}$
+\end{center}
+The number of rows and columns of the matrices are
+\begin{center}
+$\begin{array}{|c|c|c|}\hline
+{\rm matrix} & {\rm rows} & {\rm columns} \\ \hline
+A            & N          & M\\
+B            & M          & L\\
+C            & N          & L\\ \hline
+\end{array}$
+\end{center}
+$INDEX$ is a scratch vector of length $max\{L,M,N\}$.  It is used to store
+linked lists.  The output of $SYMBMM$ is $IC$ and $JC$.  They are dependent on
+the value of $DIAGC$.
+ 
+Once the nonzero structure for $C$ is known, the numerical matrix-matrix
+multiply is computed in $NUMBMM$:
+\begin{center}
+$\begin{array}{lll}
+subroutine & NUMBMM  & (N,M,L,\ IA,JA,DIAGA,A,\ IB,JB,DIAGB,B,\\
+           &         & \ IC,JC,DIAGC,C,\ TEMP)\\
+           &         & \\
+           & integer & N,M,L,\ IA(*),JA(*),DIAGA,\\
+           &         & IB(*),JB(*),DIAGB,\ IC(*),JC(*),DIAGC\\
+           & real    & A(*),\ B(*),\ C(*)
+\end{array}$
+\end{center}
+$TEMP$ is a scratch vector of length $max\{L,M,N\}$.  It is used to
+store partial sums.
+ 
+We may also compute the transpose of a matrix, resulting in a second:
+\begin{center}
+$B\ =\ A^{T}.$
+\end{center}
+We do this operation in $TRANSP$:
+\begin{center}
+$\begin{array}{lll}
+subroutine & TRANSP  & (N,M,\ IA,JA,DIAGA,A,\ IB,JB,B,\ MOVE)\\
+           &         & \\
+           & integer & N,M,\ IA(*),JA(*),DIAGA,\\
+           &         & IB(*),JB(*),\ MOVE\\
+           & real    & A(*),\ B(*)
+\end{array}$
+\end{center}
+The number of rows and columns of the matrices are
+\begin{center}
+$\begin{array}{|c|c|c|}\hline
+{\rm matrix} & {\rm rows} & {\rm columns} \\ \hline
+A            & N          & M\\
+B            & M          & N\\ \hline
+\end{array}$
+\end{center}
+We assume that $B$ will use the same diagonal storage method that is used for
+$A$.  We do not actually move the elements of $A$ into $B$ unless $MOVE$ is
+one.
+ 
+Finally, we have two routines for converting between one of the Yale formats
+and the Bank-Smith format.  This only makes sense when the matrices are
+square.  The routine $YTOBS$ will convert a Yale format sparse matrix into the
+Bank-Smith format:
+\begin{center}
+$\begin{array}{lll}
+subroutine & YTOBS   & (N,\ IA,JA,DIAGA,SYMA,A,\ IB,JB,B,\ MOVE)\\
+           &         & \\
+           & integer & N,\ IA(*),JA(*),DIAGA,SYMA,\\
+           &         & IB(*),JB(*),\ MOVE\\
+           & real    & A(*),\ B(*)
+\end{array}$
+\end{center}
+By definition, $DIAGB$ must be one.  Hence, we do not need it as an argument.
+We determine whether or not $B$ should be stored in a symmetric or
+nonsymmetric manner from $SYMA$.  We do not actually move the elements of $A$
+into $B$ unless $MOVE$ is one.
+ 
+The routine $BSTOY$ will convert a Bank-Smith format sparse matrix into one of
+the Yale formats:
+\begin{center}
+$\begin{array}{lll}
+subroutine & BSTOY   & (N,\ IA,JA,SYMA,A,\ IB,JB,DIAGB,B,\ MOVE)\\
+           &         & \\
+           & integer & N,\ IA(*),JA(*),SYMA,\\
+           &         & IB(*),JB(*),DIAGB,\ MOVE\\
+           & real    & A(*),\ B(*)
+\end{array}$
+\end{center}
+We determine which of the two formats by the value of $DIAGB$.  We determine
+whether or not $B$ should be stored in a symmetric or nonsymmetric manner from
+$SYMA$.  We do not actually move the elements of $A$ into $B$ unless $MOVE$ is
+one.
+
+% ----------------------------------------------------------------------
+ 
+\section{Algorithms}
+\label{Sec:Algorithms}
+ 
+In this section, we describe the algorithms for $SYMBMM$, $NUMBMM$,
+and $TRANSP$.  We use a metalanguage rather than real code.  One of
+the facets of these algorithms is their ability to work well with
+matrices in a variety of formats.
+ 
+\subsection{SYMBMM}
+ 
+Initialization consists of setting up the first row pointer and clearing all
+of the links (contained in $INDEX$):
+\begin{quote}\samepage
+ 1\hspace*{ 4em}$  {\bf do}\ i\in\{1,\cdots,max\{l,m,n\}\}\ \{ $ \\
+ 2\hspace*{ 8em}$      index_{i}\ =\ 0 $ \\
+ 3\hspace*{ 8em}$      \} $ \\
+ 4\hspace*{ 4em}$  {\bf if}\ (diagc\ ==\ 0)\ \{ $ \\
+ 5\hspace*{ 8em}$      ic_{1}\ =\ 1 $ \\
+ 6\hspace*{ 8em}$      \} $ \\
+ 7\hspace*{ 4em}$  {\bf else}\ \{ $ \\
+ 8\hspace*{ 8em}$      ic_{1}\ =\ n+2 $ \\
+ 9\hspace*{ 8em}$      \} $
+\end{quote}
+$INDEX$ is used to store links.  If an entry in $INDEX$ is nonzero, it is
+a pointer to the next column with a nonzero.  The links are determined as
+they are found, and are unordered.
+
+The main loop consists of three components:  initialization, a long loop that
+merges row lists, and code to copy the links into the $JC$ vector.  The
+initialization part is as follows:
+\begin{quote}
+10\hspace*{ 4em}$ {\bf do}\ i\in\{1,\cdots,n\}\ \{ $ \\
+11\hspace*{ 8em}$     istart\ =\ -1 $ \\
+12\hspace*{ 8em}$     length\ =\ 0 $
+\end{quote}
+The start column ($istart$) is reset and the number of column entries for the
+$i$-th row is assumed empty.  The loop to merge row lists is as follows:
+\begin{quote}
+13\hspace*{ 8em}$     {\bf do}\ jj\in\{ia_{i},\cdots,ia_{i+1}\}\ \{ $ \\
+14\hspace*{12em}$         {\bf if}\ (jj\ ==\ ia_{i+1})\ \{ $ \\
+15\hspace*{16em}$             {\bf if}\ (diaga\ ==\ 0\ | $ \\
+  \hspace*{19em}$                        i\ >\ min\{m,n\})\ \{ $ \\
+16\hspace*{20em}$                 {\bf next}\ jj $ \\
+17\hspace*{20em}$                 \} $ \\
+18\hspace*{16em}$             j\ =\ i $ \\
+19\hspace*{16em}$             \} $ \\
+20\hspace*{12em}$         {\bf else}\ \{ $ \\
+21\hspace*{16em}$             j\ =\ ja_{jj} $ \\
+22\hspace*{16em}$             \} $ \\
+23\hspace*{12em}$         {\bf if}\ (index_{j}\ ==\ 0\ \&\ diagb\ ==\ 1\ \& $ \\
+  \hspace*{15em}$                    j\ \leq\ min\{l,m\})\ \{ $ \\
+24\hspace*{16em}$             index_{j}\ =\ istart $ \\
+25\hspace*{16em}$             istart\ =\ j $ \\
+26\hspace*{16em}$             length\ =\ length + 1 $ \\
+27\hspace*{16em}$             \} $ \\
+28\hspace*{12em}$         {\bf do}\ k\in\{ib_{j},\cdots,ib_{j+1}-1\}\ \{ $ \\
+29\hspace*{16em}$             {\bf if}\ (index_{jb_{k}}\ ==\ 0)\ \{ $ \\
+30\hspace*{20em}$                 index_{jb_{k}}\ =\ istart $ \\
+31\hspace*{20em}$                 istart\ =\ jb_{k} $ \\
+32\hspace*{20em}$                 length\ =\ length + 1 $ \\
+33\hspace*{20em}$                 \} $ \\
+34\hspace*{16em}$             \}\ (\rm end\ of\ k\ loop) $ \\
+35\hspace*{12em}$         \}\ (\rm end\ of\ jj\ loop) $
+\end{quote}
+Lines 14-22 determine if the $jj$ loop has to execute an ``extra'' iteration
+when $A$ is stored in the new Yale sparse matrix format.  Lines 23-27 add
+column $j$ to the linked list.  Lines 28-34 determine the intersection of this
+row i with the nonzeros in column j of $B$.  Finally, we copy the links into
+the $JC$ vector as the column indices:
+\begin{quote}
+36\hspace*{ 8em}$     {\bf if}\ (diagc\ ==\ 1\ \&\ index_{i}\ \neq\ 0)\ \{ $ \\
+37\hspace*{12em}$         length\ =\ length - 1 $ \\
+38\hspace*{12em}$         \} $ \\
+39\hspace*{ 8em}$     ic_{i+1}\ =\ ic_{i} + length $ \\
+40\hspace*{ 8em}$     {\bf do}\ j\in\{ic_{i},\cdots,ic_{i+1}-1\}\ \{ $ \\
+41\hspace*{12em}$         {\bf if}\ (diagc\ ==\ 1\ \&\ istart\ ==\ i)\ \{ $ \\
+42\hspace*{16em}$             istart\ =\ index_{istart} $ \\
+43\hspace*{16em}$             index_{i}\ =\ 0 $ \\
+44\hspace*{16em}$             \} $ \\
+45\hspace*{12em}$         jc_{j}\ =\ istart $ \\
+46\hspace*{12em}$         istart\ =\ index_{istart} $ \\
+47\hspace*{12em}$         index_{jc_{j}}\ =\ 0 $ \\
+48\hspace*{12em}$         \}\ (\rm end\ of\ j\ loop)  $ \\
+49\hspace*{ 8em}$     index_{i}\ =\ 0 $ \\
+50\hspace*{ 8em}$     \}\ (\rm end\ of\ i\ loop) $
+\end{quote}
+Lines 36-38 remove the diagonal element from the row if $C$ is stored in the
+new Yale sparse matrix format.  Note that in lines 43 and 47 the nonzero links
+are cleared.  Due to the small number of links (with respect to $N$), it would
+be extremely inefficient to clear the entire vector.  The resulting vectors
+$IC$ and $JC$ contain the nonzero structure of \mbox{$C\ =\ AB$}.
+ 
+\subsection{NUMBMM}
+ 
+Initialization consists of clearing all of the partial sums:
+\begin{quote}\samepage
+ 1\hspace*{ 4em}$ {\bf do}\ i\in\{1,\cdots,max\{l,m,n\}\}\ \{ $ \\
+ 2\hspace*{ 8em}$     temp_{i}\ =\ 0 $ \\
+ 3\hspace*{ 8em}$     \} $
+\end{quote}     
+
+The main loop forms the partial sums and then copies the completed sums into
+the correct locations in the sparse matrix structure:
+\begin{quote}\samepage
+ 4\hspace*{ 4em}$ {\bf do}\ i\in\{1,\cdots,n\}\ \{ $ \\
+ 5\hspace*{ 8em}$      {\bf do}\ jj\in\{ia_{i},\cdots,ia_{i+1}\}\ \{ $ \\
+ 6\hspace*{12em}$         {\bf if}\ (jj == ia_{i+1})\ \{ $ \\
+ 7\hspace*{16em}$             {\bf if}\ (diaga\ ==\ 0\ | $\\
+  \hspace*{18em}$                        i\ >\ min\{m,n\})\ \{ $ \\
+ 8\hspace*{20em}$                 {\bf next}\ jj $ \\
+ 9\hspace*{20em}$                 \} $ \\
+10\hspace*{16em}$             j\ =\ i $ \\
+11\hspace*{16em}$             ajj\ =\ a_{i} $ \\
+12\hspace*{16em}$             \} $ \\
+13\hspace*{12em}$         {\bf else}\ \{ $ \\
+14\hspace*{16em}$             j\ =\ ja_{jj} $ \\
+15\hspace*{16em}$             ajj\ =\ a_{jj} $ \\
+16\hspace*{16em}$             \} $ \\
+17\hspace*{12em}$         {\bf if}\ (diagb\ ==\ 1\ \&\ j \leq\ min\{l,m\})\ \{ $ \\
+18\hspace*{16em}$             temp_{j}\ =\ temp_{j} + ajj * b_{j} $ \\
+19\hspace*{16em}$             \} $ \\
+20\hspace*{12em}$         {\bf do}\ k\in\{ib_{j},\cdots,ib_{j+1}-1\}\ \{ $ \\
+21\hspace*{16em}$             temp_{jb_{k}}\ =\ temp_{jb_{k}} + ajj * b_{k} $ \\
+22\hspace*{16em}$             \}\ (\rm end\ of\ k\ loop) $ \\
+23\hspace*{12em}$         \}\ (\rm end\ of\ jj\ loop) $ \\
+24\hspace*{ 8em}$     {\bf if}\ (diagc\ ==\ 1 \ \&\ i \leq\ min\{l,n\})\ \{ $ \\
+25\hspace*{12em}$         c_{i}\ =\ temp_{i} $ \\
+26\hspace*{12em}$         temp_{i}\ =\ 0 $ \\
+27\hspace*{12em}$         \} $ \\
+28\hspace*{ 8em}$     {\bf do}\  j\in\{ic_{i},\cdots,ic_{i+1}-1\}\ \{ $ \\
+29\hspace*{12em}$         c_{j}\ =\ temp_{jc_{j}} $ \\
+30\hspace*{12em}$         temp_{jc_{j}}\ =\ 0. $ \\
+31\hspace*{12em}$         \}\ (\rm end\ of\ j\ loop) $ \\
+32\hspace*{ 8em}$     \}\ (\rm end\ of\ i\ loop) $
+\end{quote}     
+Lines 6-16 determine if the $jj$ loop has to execute an ``extra'' iteration
+when $A$ is stored in the new Yale sparse matrix format.  Lines 20-22
+accumulate the product for row $j$, and store it in lines 28-31.  Lines 17-19
+and 24-27 deal with special cases when a matrix is stored in the new Yale
+sparse matrix format.  The resulting vector $C$ contains the numerical product
+$AB$.
+ 
+\subsection{TRANSP}
+ 
+We begin by constructing $ib$.  This requires setting up the first row
+pointer and counting indices for each column:
+\begin{quote}\samepage
+ 1\hspace*{ 4em}$ {\rm do}\ i\in\{1,\cdots,m+1\}\ \{ $ \\
+ 2\hspace*{ 8em}$     ib_{i}\ =\ 0 $ \\
+ 3\hspace*{ 8em}$     \} $ \\
+ 4\hspace*{ 4em}$ {\rm if}\ (move\ ==\ 1)\ \{ $ \\
+ 5\hspace*{ 8em}$     {\rm do}\ i\in\{1,\cdots,m+1\}\ \{ $ \\
+ 6\hspace*{12em}$         b_{i}\ =\ 0 $ \\
+ 7\hspace*{12em}$         \} $ \\
+ 8\hspace*{ 8em}$     \} $ \\
+ 9\hspace*{ 4em}$ {\rm if}\ (diaga\ ==\ 1)\ \{ $ \\
+10\hspace*{ 8em}$     ib_{1}\ =\ m + 2 $ \\
+11\hspace*{ 8em}$     \} $ \\
+12\hspace*{ 4em}$ {\rm else}\ \{ $ \\
+13\hspace*{ 8em}$     ib_{1}\ =\ 1 $ \\
+14\hspace*{ 8em}$     \} $ \\
+15\hspace*{ 4em}$ {\rm do}\ i\in\{1,\cdots,n\}\ \{ $ \\
+16\hspace*{ 8em}$     {\rm do}\ j\in\{ia_{i},\cdots,ia_{i+1}-1\} $ \\
+17\hspace*{12em}$         ib_{ja_{j}+1}\ =\ ib_{ja{j}+1}+1 $ \\
+18\hspace*{12em}$         \} $ \\
+19\hspace*{ 8em}$     \} $ \\
+20\hspace*{ 4em}$ {\rm do}\ i\in\{1,\cdots,m\}\ \{ $ \\
+21\hspace*{ 8em}$    ib_{i+1}\ =\ ib_{i}+ib_{i+1} $ \\
+22\hspace*{ 8em}$    \} $
+\end{quote}     
+Lines 1-3 clear $IB$.  If we are constructing $B$ at the same time, then lines
+4-8 clear the main diagonal of $B$.  Lines 9-14 determine where the rows of
+$B$ are stored.  Lines 15-18 count the number of indices in each column and
+lines 20-22 converts this information into row pointers.
+
+Next, we construct $jb$:
+\begin{quote}\samepage
+23\hspace*{ 4em}$ {\rm do}\ i\in\{1,\cdots,n\}\ \{ $ \\
+24\hspace*{ 8em}$     {\rm do}\ j\in\{ia_{i},\cdots,ia_{i+1}-1\}\ \{ $ \\
+25\hspace*{12em}$         jj\ =\ ja_{j} $ \\
+26\hspace*{12em}$         jb_{ib_{jj}}\ =\ i $ \\
+27\hspace*{12em}$         {\rm if}\ (move\ ==\ 1)\ \} $ \\
+28\hspace*{16em}$             b_{ib_{jj}}\ =\ a_{j} $ \\
+29\hspace*{16em}$             \} $ \\
+30\hspace*{12em}$         ib_{jj}\ =\ ib_{jj}+1 $ \\
+31\hspace*{12em}$         \} $ \\
+32\hspace*{ 8em}$     \} $
+\end{quote}     
+Lines 23-32 put $i$ as a column index into row $JA(j)$ in the first possible
+position (pointed to by $IB(jj)$) and increment the pointer.  If we are
+constructing $B$ at the same time, then lines 27-29 do the copy.
+
+Finally, we have to restore $IB$:
+\begin{quote}\samepage
+33\hspace*{ 4em}$ {\rm do}\ i\in\{m,m-1,\cdots,2\}\ \{ $ \\
+34\hspace*{ 8em}$     ib_{i}\ =\ ib_{i-1} $ \\
+35\hspace*{ 8em}$     \} $ \\
+36\hspace*{ 4em}$ {\rm if}\ (diaga\ ==\ 1)\ \{ $ \\
+37\hspace*{ 8em}$     {\rm if}\ (move\ ==\ 1)\ \{ $ \\
+38\hspace*{12em}$         j\ =\ min(n,m) $ \\
+39\hspace*{12em}$         {\rm do}\ i\in\{1,j\}\ \{ $ \\
+40\hspace*{16em}$             b_{i}\ =\ a_{i} $ \\
+41\hspace*{16em}$             \} $ \\
+42\hspace*{12em}$         \} $ \\
+43\hspace*{ 8em}$     ib_{1}\ =\ m + 2 $ \\
+44\hspace*{ 8em}$     \} $ \\
+45\hspace*{ 4em}$ {\rm else}\ \{ $ \\
+46\hspace*{ 8em}$     ib_{1}\ =\ 1 $ \\
+47\hspace*{ 8em}$     \} $
+\end{quote}     
+Lines 34, 43, and 46 do the real work in restoring $IB$.  Lines 36-42 finish
+copying the main diagonal of $A$ when it is stored in the new Yale sparse
+matrix format.
+ 
+% ----------------------------------------------------------------------
+ 
+\section{Fortran source code}
+\label{Sec:Source_Code}
+ 
+The Fortran source code for this package is freely available from Netlib
+as the file linalg/smmp.shar.
+
+
+% ----------------------------------------------------------------------
+ 
+%\newpage
+
+\begin{thebibliography}{99}
+ 
+\bibitem{BankSmith87}
+  R. E. Bank and R. K. Smith,
+  {\em General sparse elimination requires no permanent integer storage},
+  SIAM J. Sci. Stat. Comp., 8 (1987), pp. 574--584.
+ 
+\bibitem{DouglasMiranker87}
+  C. C. Douglas and W. L. Miranker,
+  {\em Constructive interference in parallel algorithms},
+  SIAM J. Numer. Anal., 25 (1988), pp. 376--398.
+ 
+\bibitem{DouglasSmith88}
+  C. C. Douglas and B. F. Smith,
+  {\em Using symmetries and antisymmetries to analyze a parallel
+       multigrid algorithm: the elliptic boundary value case}
+  SIAM J. Numer. Anal., 26 (1989), pp. 1439--1461.
+ 
+\bibitem{DuffMarrRadi92}
+  I. Duff, M. Marrone, and G. Radicati,
+  {\em A proposal for user level sparse {BLAS}},
+  in preparation.
+
+\bibitem{NewYSMP}
+  S. C. Eisenstat and H. C. Elman and M. H. Schultz and A. H. Sherman,
+  {\em The (new) Yale sparse matrix package },
+  in Elliptic Problem Solvers II, G. Birkhoff and A. Schoenstadt, editors,
+  Academic Press, New York, 1984, pp. 45--52.
+
+\bibitem{YSMP1}
+  S. C. Eisenstat and M. C. Gursky and M. H. Schultz and A. H. Sherman,
+  {\em Yale sparse matrix package I:  the symmetric codes},
+  Int. J. Numer. Methods in Engin., 18 (1982), pp. 1145-1151.
+
+\bibitem{YSMP2}
+  \leavevmode\vrule height 2pt depth -1.6pt width 23pt, 
+  {\em Yale sparse matrix package II:  the nonsymmetric codes},
+  Research Report 114, Department of Computer Science, Yale University,
+  New Haven, CT, 1977.
+
+\bibitem{Heroux}
+  M. A. Heroux,
+  {\em  Proposal for a sparse {BLAS} toolkit},
+  in preparation.
+
+\bibitem{Saad90}
+  Y. Saad,
+  {\em {SPARSKIT}: a basic tool kit for sparse matrix computations},
+  preliminary version, 1990.
+  Available by anonymous ftp from riacs.edu.
+\end{thebibliography}
+ 
+% ----------------------------------------------------------------------
+
+\end{document}
